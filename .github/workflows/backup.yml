@@ -1,10 +1,9 @@
-name: Backup Diario a Google Drive
+name: Backup Diario con Rclone
 
 on:
   schedule:
-    # Se ejecuta a las 3:00 AM UTC todos los días
     - cron: '0 3 * * *'
-  workflow_dispatch: # Permite ejecutarlo manualmente desde GitHub para probar
+  workflow_dispatch:
 
 jobs:
   backup_and_upload:
@@ -13,7 +12,8 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
-      - name: Instalar herramientas de PostgreSQL 17
+      # 1. Instalamos las herramientas de base de datos
+      - name: Instalar herramientas PostgreSQL 17
         run: |
           sudo apt-get install -y wget gnupg2 lsb-release
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
@@ -21,23 +21,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
 
-      - name: Crear Backup (pg_dump)
+      # 2. Instalamos Rclone
+      - name: Instalar Rclone
+        run: |
+          sudo -v ; curl https://rclone.org/install.sh | sudo bash
+
+      # 3. Configuramos Rclone con tu secreto
+      - name: Configurar Rclone
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+
+      # 4. Crear Backup y Subir
+      - name: Backup y Subida
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          # Crea un archivo con la fecha actual, ej: backup-2024-01-28.sql
+          # Nombre del archivo
           FILENAME=backup-$(date +%Y-%m-%d).sql
-          echo "FILENAME=$FILENAME" >> $GITHUB_ENV
-           
-          # Ejecuta el dump usando la URL secreta
-          # CAMBIO AQUÍ: Usamos la ruta completa /usr/lib/postgresql/17/bin/pg_dump
+          
+          echo "📦 Creando backup..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILENAME"
 
-      - name: Subir a Google Drive
-        uses: adityak74/google-drive-upload-git-action@main
-        with:
-          credentials: ${{ secrets.DRIVE_GHA_CREDS }}
-          filename: ${{ env.FILENAME }}
-          folderId: '1Xx6xpJgIAGizEbFML8ECyUO5W1LwZvJJ' 
-          name: ${{ env.FILENAME }}
-          overwrite: "false"
+          echo "🚀 Subiendo a Google Drive (Carpeta Backups)..."
+          # Esto subirá el archivo a una carpeta llamada "Backups" en tu Drive.
+          # Si no existe, la crea automáticamente.
+          rclone copy "$FILENAME" midrive:Backups
+          
+          echo "✅ ¡Listo!"
