@@ -32,7 +32,8 @@ jobs:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
         run: |
           mkdir -p ~/.config/rclone
-          echo "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          # Decodificamos el secreto Base64 para recuperar el formato perfecto
+          echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
 
       # 4. Crear Backup y Subir
       - name: Backup y Subida
