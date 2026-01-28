@@ -28,9 +28,10 @@ jobs:
           # Crea un archivo con la fecha actual, ej: backup-2024-01-28.sql
           FILENAME=backup-$(date +%Y-%m-%d).sql
           echo "FILENAME=$FILENAME" >> $GITHUB_ENV
-          
+           
           # Ejecuta el dump usando la URL secreta
-          pg_dump "$DATABASE_URL" -f "$FILENAME"
+          # CAMBIO AQUÍ: Usamos la ruta completa /usr/lib/postgresql/17/bin/pg_dump
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILENAME"
 
       - name: Subir a Google Drive
         uses: adityak74/google-drive-upload-git-action@main
