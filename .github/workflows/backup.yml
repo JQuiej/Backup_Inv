@@ -1,9 +1,9 @@
-name: Backup Diario con Rclone
+name: Backup Dual (Supabase & Postgres Limpio)
 
 on:
   schedule:
-    - cron: '0 3 * * *'
-  workflow_dispatch:
+    - cron: '0 3 * * *' # Ejecuta a las 3:00 AM UTC
+  workflow_dispatch: # Botón manual
 
 jobs:
   backup_and_upload:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
-      # 1. Instalamos las herramientas de base de datos
+      # 1. Instalar herramientas PostgreSQL 17
       - name: Instalar herramientas PostgreSQL 17
         run: |
           sudo apt-get install -y wget gnupg2 lsb-release
@@ -21,34 +21,39 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
 
-      # 2. Instalamos Rclone
+      # 2. Instalar Rclone
       - name: Instalar Rclone
         run: |
           sudo -v ; curl https://rclone.org/install.sh | sudo bash
 
-      # 3. Configuramos Rclone con tu secreto
-      - name: Configurar Rclone
-        env:
-          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
-        run: |
-          mkdir -p ~/.config/rclone
-          # Decodificamos el secreto Base64 para recuperar el formato perfecto
-          echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
-
-      # 4. Crear Backup y Subir
-      - name: Backup y Subida
+      # 3. Generar Backups y Subir
+      - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+          # Variables de entorno para Rclone (ya configuradas en GitHub Secrets)
+          RCLONE_CONFIG_MIDRIVE_TYPE: drive
+          RCLONE_CONFIG_MIDRIVE_SCOPE: drive
+          RCLONE_CONFIG_MIDRIVE_TOKEN: ${{ secrets.RCLONE_TOKEN_JSON }}
         run: |
-          # Nombre del archivo
-          FILENAME=backup-$(date +%Y-%m-%d).sql
+          # Definir fecha
+          DATE=$(date +%Y-%m-%d)
           
-          echo "📦 Creando backup..."
-          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILENAME"
+          # Nombres de archivos
+          FILE_SUPABASE="backup-supabase-$DATE.sql"
+          FILE_POSTGRES="backup-postgres-clean-$DATE.sql"
+          
+          echo "📦 Generando versión SUPABASE (Completa)..."
+          # Incluye todo (roles, dueños, permisos). Ideal para restaurar en Supabase.
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILE_SUPABASE"
 
-          echo "🚀 Subiendo a Google Drive (Carpeta Backups)..."
-          # Esto subirá el archivo a una carpeta llamada "Backups" en tu Drive.
-          # Si no existe, la crea automáticamente.
-          rclone copy "$FILENAME" midrive:Backups
+          echo "🧹 Generando versión POSTGRES (Limpia)..."
+          # Elimina 'owner' y 'privileges'. Ideal para Local, Docker o VPS.
+          # Esto evita errores como 'role postgres does not exist'.
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl -f "$FILE_POSTGRES"
+
+          echo "🚀 Subiendo ambos archivos a Google Drive..."
+          # Subimos los dos archivos a la carpeta 'Backups'
+          rclone copy "$FILE_SUPABASE" midrive:Backups
+          rclone copy "$FILE_POSTGRES" midrive:Backups
           
-          echo "✅ ¡Listo!"
+          echo "✅ ¡Éxito! Se subieron: $FILE_SUPABASE y $FILE_POSTGRES"
