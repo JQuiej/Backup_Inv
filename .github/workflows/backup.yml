@@ -1,4 +1,4 @@
-name: Backup Dual con Rclone (Limpio y Compatible)
+name: Backup Diario
 
 on:
   schedule:
@@ -34,7 +34,7 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
 
-      # 4. Generar y Preparar Backups
+      # 4. Generar y Reparar Backups
       - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -43,40 +43,46 @@ jobs:
           FILE_SUPABASE="backup-supabase-$DATE.sql"
           FILE_POSTGRES="backup-postgres-clean-$DATE.sql"
           
-          echo "📦 Generando versión SUPABASE (Completa)..."
+          echo "📦 Generando versión SUPABASE..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILE_SUPABASE"
 
           echo "🧹 Generando versión POSTGRES..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --inserts -n public -f "$FILE_POSTGRES"
           
-          echo "🔧 Limpiando archivo..."
-          sed -i '/^\\restrict/d' "$FILE_POSTGRES"
-          sed -i '/^CREATE EXTENSION/d' "$FILE_POSTGRES"
-          sed -i '/^COMMENT ON EXTENSION/d' "$FILE_POSTGRES"
-          sed -i '/^CREATE SCHEMA/d' "$FILE_POSTGRES"
-          sed -i '/^SELECT pg_catalog.set_config/d' "$FILE_POSTGRES"
+          # === FASE DE CIRUGÍA (SOLUCIÓN DEFINITIVA) ===
+          echo "🔧 Eliminando restricciones y basura..."
 
-          # === FASE DE INYECCIÓN  ===
-          echo "💉 Inyectando Mocks y Modo Réplica..."
+          sed -i '/restrict/d' "$FILE_POSTGRES"
+
+          # Borrar extensiones incompatibles
+          sed -i '/CREATE EXTENSION/d' "$FILE_POSTGRES"
+          sed -i '/COMMENT ON EXTENSION/d' "$FILE_POSTGRES"
+          sed -i '/CREATE SCHEMA/d' "$FILE_POSTGRES"
+          sed -i '/pg_catalog.set_config/d' "$FILE_POSTGRES"
+
+          # ELIMINAR LLAVES FORÁNEAS A AUTH.USERS
+          # Esto borra cualquier línea que intente conectar tus datos con la tabla de usuarios.
+          sed -i '/REFERENCES auth.users/d' "$FILE_POSTGRES"
+
+          echo "💉 Inyectando tablas falsas..."
           
-          echo "-- Encabezado inyectado: Configuración Local" > header.sql
-          
+          echo "-- Header automático" > header.sql
+          # Desactivar triggers por seguridad
           echo "SET session_replication_role = 'replica';" >> header.sql
-          echo "" >> header.sql
-
-          # 2. Esquema extensions
+          
+          # Crear esquemas necesarios
+          echo "CREATE SCHEMA IF NOT EXISTS auth;" >> header.sql
+          echo "CREATE SCHEMA IF NOT EXISTS storage;" >> header.sql
           echo "CREATE SCHEMA IF NOT EXISTS extensions;" >> header.sql
+          
+          # Crear funciones de extensiones (Mocks)
           echo "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA extensions;" >> header.sql
           echo "CREATE EXTENSION IF NOT EXISTS \"pgcrypto\" SCHEMA extensions;" >> header.sql
           
-          # 3. Esquema auth y tabla users (Falsa)
-          echo "CREATE SCHEMA IF NOT EXISTS auth;" >> header.sql
-          echo "CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text, created_at timestamptz);" >> header.sql
+          echo "CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text);" >> header.sql
           
-          # 4. Esquema storage
-          echo "CREATE SCHEMA IF NOT EXISTS storage;" >> header.sql
-          echo "CREATE TABLE IF NOT EXISTS storage.objects (id uuid PRIMARY KEY, bucket_id text, name text, owner uuid);" >> header.sql
-          
+          echo "INSERT INTO auth.users (id, email) VALUES ('1f2e072c-1bfc-4748-a853-6981a587d5ef', 'admin@backup.local') ON CONFLICT DO NOTHING;" >> header.sql
+
           echo "" >> header.sql
 
           # Unir todo
@@ -87,4 +93,4 @@ jobs:
           rclone copy "$FILE_SUPABASE" midrive:Backups
           rclone copy "$FILE_POSTGRES" midrive:Backups
           
-          echo "✅ ¡Éxito!"
+          echo "✅ ¡Listo!"
