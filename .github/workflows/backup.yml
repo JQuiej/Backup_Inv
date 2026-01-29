@@ -34,7 +34,7 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
 
-      # 4. Generar y Limpiar Backups
+      # 4. Generar y Preparar Backups
       - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -46,27 +46,42 @@ jobs:
           echo "📦 Generando versión SUPABASE (Completa)..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILE_SUPABASE"
 
-          echo "🧹 Generando versión POSTGRES (Para Windows/Local)..."
-          # -n public: Solo descargamos tus tablas, nada de sistemas internos.
+          echo "🧹 Generando versión POSTGRES..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --inserts -n public -f "$FILE_POSTGRES"
           
-          # === LIMPIEZA AUTOMÁTICA ===
-          echo "✂️ Eliminando extensiones incompatibles..."
-          
-          # 1. Borrar línea basura '\restrict'
+          echo "🔧 Limpiando archivo..."
           sed -i '/^\\restrict/d' "$FILE_POSTGRES"
-          
-          # 2. Borrar creación de extensiones (pg_graphql, etc)
           sed -i '/^CREATE EXTENSION/d' "$FILE_POSTGRES"
-          
-          # 3. Borrar comentarios sobre extensiones
           sed -i '/^COMMENT ON EXTENSION/d' "$FILE_POSTGRES"
-          
-          # 4. Borrar creación de esquemas (public ya existe en local)
           sed -i '/^CREATE SCHEMA/d' "$FILE_POSTGRES"
-          
-          # 5. Borrar selección de esquema (para evitar errores de búsqueda)
           sed -i '/^SELECT pg_catalog.set_config/d' "$FILE_POSTGRES"
+
+          # === FASE DE INYECCIÓN  ===
+          echo "💉 Inyectando Mocks y Modo Réplica..."
+          
+          echo "-- Encabezado inyectado: Configuración Local" > header.sql
+          
+          echo "SET session_replication_role = 'replica';" >> header.sql
+          echo "" >> header.sql
+
+          # 2. Esquema extensions
+          echo "CREATE SCHEMA IF NOT EXISTS extensions;" >> header.sql
+          echo "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA extensions;" >> header.sql
+          echo "CREATE EXTENSION IF NOT EXISTS \"pgcrypto\" SCHEMA extensions;" >> header.sql
+          
+          # 3. Esquema auth y tabla users (Falsa)
+          echo "CREATE SCHEMA IF NOT EXISTS auth;" >> header.sql
+          echo "CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text, created_at timestamptz);" >> header.sql
+          
+          # 4. Esquema storage
+          echo "CREATE SCHEMA IF NOT EXISTS storage;" >> header.sql
+          echo "CREATE TABLE IF NOT EXISTS storage.objects (id uuid PRIMARY KEY, bucket_id text, name text, owner uuid);" >> header.sql
+          
+          echo "" >> header.sql
+
+          # Unir todo
+          cat header.sql "$FILE_POSTGRES" > temp.sql && mv temp.sql "$FILE_POSTGRES"
+          rm header.sql
 
           echo "🚀 Subiendo a Google Drive..."
           rclone copy "$FILE_SUPABASE" midrive:Backups
