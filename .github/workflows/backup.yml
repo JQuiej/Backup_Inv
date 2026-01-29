@@ -34,7 +34,7 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
 
-      # 4. Generar y Limpiar Backups (Con Python)
+      # 4. Generar y Limpiar Backups (Con Python Mejorado)
       - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -49,51 +49,46 @@ jobs:
           echo "🧹 Generando versión POSTGRES..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --inserts -n public -f "$FILE_POSTGRES"
           
+          # === LIMPIEZA INTELIGENTE ===
           echo " Ejecutando script de limpieza Python..."
           python3 -c "
           import re
-          import sys
-
+          
           filename = '$FILE_POSTGRES'
-
+          
           with open(filename, 'r', encoding='utf-8') as f:
               sql = f.read()
-
-          # 1. Eliminar bloques completos de FK a auth.users (Evita errores de sintaxis y de llave foránea)
-          # Busca desde 'ALTER TABLE' hasta el ';' si contiene 'REFERENCES auth.users'
-          sql = re.sub(r'ALTER TABLE ONLY public\.\w+\s+ADD CONSTRAINT.*?REFERENCES auth\.users.*?;\n', '', sql, flags=re.DOTALL)
           
-          # 2. Eliminar referencias a auth.users en otros contextos (por seguridad)
-          sql = re.sub(r'REFERENCES auth\.users.*?;', ';', sql, flags=re.DOTALL)
-
-          # 3. Eliminar la línea basura '\restrict'
+          sql = re.sub(r'ALTER TABLE ONLY public\.\w+\s+ADD CONSTRAINT[^;]+REFERENCES auth\.users[^;]*;', '', sql, flags=re.DOTALL)
+          
           sql = re.sub(r'^\\restrict.*$', '', sql, flags=re.MULTILINE)
-
-          # 4. Eliminar extensiones que dan error en Windows
-          sql = re.sub(r'^CREATE EXTENSION.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
-          sql = re.sub(r'^COMMENT ON EXTENSION.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
-          sql = re.sub(r'^CREATE SCHEMA.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
-          sql = re.sub(r'^SELECT pg_catalog\.set_config.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
-
+          
+          sql = re.sub(r'CREATE EXTENSION[^;]*;', '', sql, flags=re.DOTALL)
+          sql = re.sub(r'COMMENT ON EXTENSION[^;]*;', '', sql, flags=re.DOTALL)
+          sql = re.sub(r'CREATE SCHEMA[^;]*;', '', sql, flags=re.DOTALL)
+          sql = re.sub(r'SELECT pg_catalog\.set_config[^;]*;', '', sql, flags=re.DOTALL)
+          
           with open(filename, 'w', encoding='utf-8') as f:
               f.write(sql)
           "
 
-          # === INYECCIÓN DE PREPARATIVOS ===
-          echo "💉 Inyectando Mocks básicos..."
+          echo "💉 Inyectando Mocks y Modo Réplica..."
           echo "-- Header Limpio" > header.sql
           
+          # Modo réplica (acepta datos aunque falten referencias)
           echo "SET session_replication_role = 'replica';" >> header.sql
           
+          # Mocks para evitar errores de 'no existe esquema'
           echo "CREATE SCHEMA IF NOT EXISTS auth;" >> header.sql
           echo "CREATE SCHEMA IF NOT EXISTS storage;" >> header.sql
           echo "CREATE SCHEMA IF NOT EXISTS extensions;" >> header.sql
           
+          # Extensión UUID (Vital para tus PKs)
           echo "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA extensions;" >> header.sql
           
           echo "" >> header.sql
           
-          # Unir
+          # Unir todo
           cat header.sql "$FILE_POSTGRES" > temp.sql && mv temp.sql "$FILE_POSTGRES"
           rm header.sql
 
