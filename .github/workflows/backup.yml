@@ -12,7 +12,7 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
-      # 1. Instalamos las herramientas de base de datos
+      # 1. Instalar herramientas PostgreSQL 17
       - name: Instalar herramientas PostgreSQL 17
         run: |
           sudo apt-get install -y wget gnupg2 lsb-release
@@ -21,43 +21,41 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
 
-      # 2. Instalamos Rclone
+      # 2. Instalar Rclone
       - name: Instalar Rclone
         run: |
           sudo -v ; curl https://rclone.org/install.sh | sudo bash
 
-      # 3. Configuramos Rclone con tu secreto (Base64)
+      # 3. Configuramos Rclone
       - name: Configurar Rclone
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
         run: |
           mkdir -p ~/.config/rclone
-          # Decodificamos el secreto Base64 tal como lo tenías funcionando
           echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
 
-      # 4. Crear Doble Backup y Subir
+      # 4. Crear Backups y Subir
       - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          # Definir fecha
           DATE=$(date +%Y-%m-%d)
           
           # Nombres de archivos
           FILE_SUPABASE="backup-supabase-$DATE.sql"
           FILE_POSTGRES="backup-postgres-clean-$DATE.sql"
           
-          echo "📦 Generando versión SUPABASE (Completa)..."
-          # Incluye todo (roles, dueños, permisos). Ideal para restaurar en Supabase.
+          echo "📦 Generando versión SUPABASE..."
+          # Este se queda igual (para restaurar en otra nube Supabase si hace falta)
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILE_SUPABASE"
 
-          echo "🧹 Generando versión POSTGRES (Limpia)..."
-          # Elimina 'owner' y 'privileges'. Ideal para Local, Docker o VPS.
-          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl -f "$FILE_POSTGRES"
+          echo "🧹 Generando versión POSTGRES (Compatible pgAdmin)..."
+          # AGREGAMOS: --inserts
+          # Esto genera 'INSERT INTO tabla VALUES (...)' que funciona SIEMPRE en pgAdmin
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --inserts -f "$FILE_POSTGRES"
 
-          echo "🚀 Subiendo ambos archivos a Google Drive (Carpeta Backups)..."
-          # Subimos los dos archivos
+          echo "🚀 Subiendo a Google Drive..."
           rclone copy "$FILE_SUPABASE" midrive:Backups
           rclone copy "$FILE_POSTGRES" midrive:Backups
           
-          echo "✅ ¡Éxito! Se subieron: $FILE_SUPABASE y $FILE_POSTGRES"
+          echo "✅ ¡Éxito!"
