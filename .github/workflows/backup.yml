@@ -1,4 +1,4 @@
-name: Backup Dual con Rclone
+name: Backup Dual con Rclone (Limpio y Compatible)
 
 on:
   schedule:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
-      # 1. Instalar herramientas PostgreSQL 17
+      # 1. Instalar herramientas
       - name: Instalar herramientas PostgreSQL 17
         run: |
           sudo apt-get install -y wget gnupg2 lsb-release
@@ -26,7 +26,7 @@ jobs:
         run: |
           sudo -v ; curl https://rclone.org/install.sh | sudo bash
 
-      # 3. Configuramos Rclone
+      # 3. Configurar Rclone
       - name: Configurar Rclone
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
@@ -34,25 +34,39 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
 
-      # 4. Crear Backups y Subir
+      # 4. Generar y Limpiar Backups
       - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           DATE=$(date +%Y-%m-%d)
-          
-          # Nombres de archivos
           FILE_SUPABASE="backup-supabase-$DATE.sql"
           FILE_POSTGRES="backup-postgres-clean-$DATE.sql"
           
-          echo "📦 Generando versión SUPABASE..."
-          # Este se queda igual (para restaurar en otra nube Supabase si hace falta)
+          echo "📦 Generando versión SUPABASE (Completa)..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" -f "$FILE_SUPABASE"
 
-          echo "🧹 Generando versión POSTGRES (Compatible pgAdmin)..."
-          # AGREGAMOS: --inserts
-          # Esto genera 'INSERT INTO tabla VALUES (...)' que funciona SIEMPRE en pgAdmin
-          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --inserts -f "$FILE_POSTGRES"
+          echo "🧹 Generando versión POSTGRES (Para Windows/Local)..."
+          # -n public: Solo descargamos tus tablas, nada de sistemas internos.
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --inserts -n public -f "$FILE_POSTGRES"
+          
+          # === LIMPIEZA AUTOMÁTICA ===
+          echo "✂️ Eliminando extensiones incompatibles..."
+          
+          # 1. Borrar línea basura '\restrict'
+          sed -i '/^\\restrict/d' "$FILE_POSTGRES"
+          
+          # 2. Borrar creación de extensiones (pg_graphql, etc)
+          sed -i '/^CREATE EXTENSION/d' "$FILE_POSTGRES"
+          
+          # 3. Borrar comentarios sobre extensiones
+          sed -i '/^COMMENT ON EXTENSION/d' "$FILE_POSTGRES"
+          
+          # 4. Borrar creación de esquemas (public ya existe en local)
+          sed -i '/^CREATE SCHEMA/d' "$FILE_POSTGRES"
+          
+          # 5. Borrar selección de esquema (para evitar errores de búsqueda)
+          sed -i '/^SELECT pg_catalog.set_config/d' "$FILE_POSTGRES"
 
           echo "🚀 Subiendo a Google Drive..."
           rclone copy "$FILE_SUPABASE" midrive:Backups
