@@ -12,7 +12,7 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
-      # 1. Instalar herramientas
+      # 1. Instalar herramientas PostgreSQL
       - name: Instalar herramientas PostgreSQL 17
         run: |
           sudo apt-get install -y wget gnupg2 lsb-release
@@ -34,7 +34,7 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
 
-      # 4. Generar y Reparar Backups
+      # 4. Generar y Limpiar Backups (Con Python)
       - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -49,43 +49,51 @@ jobs:
           echo "🧹 Generando versión POSTGRES..."
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --inserts -n public -f "$FILE_POSTGRES"
           
-          # === FASE DE CIRUGÍA (SOLUCIÓN DEFINITIVA) ===
-          echo "🔧 Eliminando restricciones y basura..."
+          echo " Ejecutando script de limpieza Python..."
+          python3 -c "
+          import re
+          import sys
 
-          sed -i '/restrict/d' "$FILE_POSTGRES"
+          filename = '$FILE_POSTGRES'
 
-          # Borrar extensiones incompatibles
-          sed -i '/CREATE EXTENSION/d' "$FILE_POSTGRES"
-          sed -i '/COMMENT ON EXTENSION/d' "$FILE_POSTGRES"
-          sed -i '/CREATE SCHEMA/d' "$FILE_POSTGRES"
-          sed -i '/pg_catalog.set_config/d' "$FILE_POSTGRES"
+          with open(filename, 'r', encoding='utf-8') as f:
+              sql = f.read()
 
-          # ELIMINAR LLAVES FORÁNEAS A AUTH.USERS
-          # Esto borra cualquier línea que intente conectar tus datos con la tabla de usuarios.
-          sed -i '/REFERENCES auth.users/d' "$FILE_POSTGRES"
-
-          echo "💉 Inyectando tablas falsas..."
+          # 1. Eliminar bloques completos de FK a auth.users (Evita errores de sintaxis y de llave foránea)
+          # Busca desde 'ALTER TABLE' hasta el ';' si contiene 'REFERENCES auth.users'
+          sql = re.sub(r'ALTER TABLE ONLY public\.\w+\s+ADD CONSTRAINT.*?REFERENCES auth\.users.*?;\n', '', sql, flags=re.DOTALL)
           
-          echo "-- Header automático" > header.sql
-          # Desactivar triggers por seguridad
+          # 2. Eliminar referencias a auth.users en otros contextos (por seguridad)
+          sql = re.sub(r'REFERENCES auth\.users.*?;', ';', sql, flags=re.DOTALL)
+
+          # 3. Eliminar la línea basura '\restrict'
+          sql = re.sub(r'^\\restrict.*$', '', sql, flags=re.MULTILINE)
+
+          # 4. Eliminar extensiones que dan error en Windows
+          sql = re.sub(r'^CREATE EXTENSION.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
+          sql = re.sub(r'^COMMENT ON EXTENSION.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
+          sql = re.sub(r'^CREATE SCHEMA.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
+          sql = re.sub(r'^SELECT pg_catalog\.set_config.*?;', '', sql, flags=re.MULTILINE|re.DOTALL)
+
+          with open(filename, 'w', encoding='utf-8') as f:
+              f.write(sql)
+          "
+
+          # === INYECCIÓN DE PREPARATIVOS ===
+          echo "💉 Inyectando Mocks básicos..."
+          echo "-- Header Limpio" > header.sql
+          
           echo "SET session_replication_role = 'replica';" >> header.sql
           
-          # Crear esquemas necesarios
           echo "CREATE SCHEMA IF NOT EXISTS auth;" >> header.sql
           echo "CREATE SCHEMA IF NOT EXISTS storage;" >> header.sql
           echo "CREATE SCHEMA IF NOT EXISTS extensions;" >> header.sql
           
-          # Crear funciones de extensiones (Mocks)
           echo "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA extensions;" >> header.sql
-          echo "CREATE EXTENSION IF NOT EXISTS \"pgcrypto\" SCHEMA extensions;" >> header.sql
           
-          echo "CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text);" >> header.sql
-          
-          echo "INSERT INTO auth.users (id, email) VALUES ('1f2e072c-1bfc-4748-a853-6981a587d5ef', 'admin@backup.local') ON CONFLICT DO NOTHING;" >> header.sql
-
           echo "" >> header.sql
-
-          # Unir todo
+          
+          # Unir
           cat header.sql "$FILE_POSTGRES" > temp.sql && mv temp.sql "$FILE_POSTGRES"
           rm header.sql
 
@@ -93,4 +101,4 @@ jobs:
           rclone copy "$FILE_SUPABASE" midrive:Backups
           rclone copy "$FILE_POSTGRES" midrive:Backups
           
-          echo "✅ ¡Listo!"
+          echo "✅ ¡Éxito!"
