@@ -1,9 +1,9 @@
-name: Backup Dual (Supabase & Postgres Limpio)
+name: Backup Dual con Rclone
 
 on:
   schedule:
-    - cron: '0 3 * * *' # Ejecuta a las 3:00 AM UTC
-  workflow_dispatch: # Botón manual
+    - cron: '0 3 * * *'
+  workflow_dispatch:
 
 jobs:
   backup_and_upload:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
-      # 1. Instalar herramientas PostgreSQL 17
+      # 1. Instalamos las herramientas de base de datos
       - name: Instalar herramientas PostgreSQL 17
         run: |
           sudo apt-get install -y wget gnupg2 lsb-release
@@ -21,19 +21,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
 
-      # 2. Instalar Rclone
+      # 2. Instalamos Rclone
       - name: Instalar Rclone
         run: |
           sudo -v ; curl https://rclone.org/install.sh | sudo bash
 
-      # 3. Generar Backups y Subir
+      # 3. Configuramos Rclone con tu secreto (Base64)
+      - name: Configurar Rclone
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          # Decodificamos el secreto Base64 tal como lo tenías funcionando
+          echo "$RCLONE_CONF" | base64 --decode > ~/.config/rclone/rclone.conf
+
+      # 4. Crear Doble Backup y Subir
       - name: Generar Backups y Subir
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
-          # Variables de entorno para Rclone (ya configuradas en GitHub Secrets)
-          RCLONE_CONFIG_MIDRIVE_TYPE: drive
-          RCLONE_CONFIG_MIDRIVE_SCOPE: drive
-          RCLONE_CONFIG_MIDRIVE_TOKEN: ${{ secrets.RCLONE_TOKEN_JSON }}
         run: |
           # Definir fecha
           DATE=$(date +%Y-%m-%d)
@@ -48,11 +53,10 @@ jobs:
 
           echo "🧹 Generando versión POSTGRES (Limpia)..."
           # Elimina 'owner' y 'privileges'. Ideal para Local, Docker o VPS.
-          # Esto evita errores como 'role postgres does not exist'.
           /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl -f "$FILE_POSTGRES"
 
-          echo "🚀 Subiendo ambos archivos a Google Drive..."
-          # Subimos los dos archivos a la carpeta 'Backups'
+          echo "🚀 Subiendo ambos archivos a Google Drive (Carpeta Backups)..."
+          # Subimos los dos archivos
           rclone copy "$FILE_SUPABASE" midrive:Backups
           rclone copy "$FILE_POSTGRES" midrive:Backups
           
